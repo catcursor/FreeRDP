@@ -233,13 +233,20 @@ UINT cliprdr_process_format_data_request(cliprdrPlugin* cliprdr, wStream* s, UIN
 
 	const UINT32 mask =
 	    freerdp_settings_get_uint32(context->rdpcontext->settings, FreeRDP_ClipboardFeatureMask);
-	if ((mask & (CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_LOCAL_TO_REMOTE_FILES)) == 0)
+	const BOOL directionAllowed =
+	    (mask & (CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_LOCAL_TO_REMOTE_FILES)) != 0;
+	const BOOL forcedRequest =
+	    !directionAllowed &&
+	    cliprdr_accept_forced_format_request(cliprdr, formatDataRequest.requestedFormatId);
+	if (!directionAllowed && !forcedRequest)
 	{
 		return cliprdr_send_error_response(cliprdr, CB_FORMAT_DATA_RESPONSE);
 	}
 
 	context->lastRequestedFormatId = formatDataRequest.requestedFormatId;
 	IFCALLRET(context->ServerFormatDataRequest, error, context, &formatDataRequest);
+	if (error && forcedRequest)
+		cliprdr_cancel_forced_format_request(cliprdr);
 	if (error)
 		WLog_Print(cliprdr->log, WLOG_ERROR,
 		           "ServerFormatDataRequest failed with error %" PRIu32 "!", error);

@@ -42,6 +42,7 @@
 #include <freerdp/locale/locale.h>
 
 #include "xf_event.h"
+#include "xf_cliprdr.h"
 
 #include "xf_keyboard.h"
 
@@ -530,6 +531,7 @@ static void xf_keyboard_clear(xfContext* xfc)
 {
 	WINPR_ASSERT(xfc);
 	ZeroMemory(xfc->KeyboardState, sizeof(xfc->KeyboardState));
+	xfc->clipboardPushKeycode = 0;
 }
 
 static BOOL xf_action_script_append(xfContext* xfc, const char* buffer, size_t size,
@@ -876,6 +878,16 @@ void xf_keyboard_key_press(xfContext* xfc, const XKeyEvent* event, KeySym keysym
 	last = xfc->KeyboardState[event->keycode];
 	xfc->KeyboardState[event->keycode] = TRUE;
 
+	if (xfc->clipboardPushKeycode == event->keycode)
+		return;
+
+	if (!last && (event->state & ControlMask) && (event->state & ShiftMask) &&
+	    ((keysym == XK_V) || (keysym == XK_v)) && xf_cliprdr_force_local_to_remote(xfc))
+	{
+		xfc->clipboardPushKeycode = event->keycode;
+		return;
+	}
+
 	if (xf_keyboard_handle_special_keys(xfc, keysym))
 		return;
 
@@ -890,6 +902,11 @@ void xf_keyboard_key_release(xfContext* xfc, const XKeyEvent* event, KeySym keys
 
 	BOOL last = xfc->KeyboardState[event->keycode];
 	xfc->KeyboardState[event->keycode] = FALSE;
+	if (xfc->clipboardPushKeycode == event->keycode)
+	{
+		xfc->clipboardPushKeycode = 0;
+		return;
+	}
 	xf_keyboard_handle_special_keys_release(xfc, keysym);
 	xf_keyboard_send_key(xfc, FALSE, last, event);
 }

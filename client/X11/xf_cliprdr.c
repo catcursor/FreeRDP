@@ -137,6 +137,7 @@ struct xf_clipboard
 
 	CliprdrFileContext* file;
 	BOOL isImageContent;
+	BOOL forceSelectionPending;
 };
 
 static const char mime_text_plain[] = "text/plain";
@@ -836,7 +837,7 @@ static void xf_cliprdr_provide_server_format_list(xfClipboard* clipboard)
 }
 
 static UINT xf_cliprdr_send_format_list(xfClipboard* clipboard, const CLIPRDR_FORMAT* formats,
-                                        UINT32 numFormats)
+                                        UINT32 numFormats, BOOL force)
 {
 	union
 	{
@@ -871,15 +872,21 @@ static UINT xf_cliprdr_send_format_list(xfClipboard* clipboard, const CLIPRDR_FO
 		return ret;
 
 	WINPR_ASSERT(clipboard->context);
+	if (force)
+	{
+		WINPR_ASSERT(clipboard->context->ClientFormatListForce);
+		return clipboard->context->ClientFormatListForce(clipboard->context, &formatList);
+	}
+
 	WINPR_ASSERT(clipboard->context->ClientFormatList);
 	return clipboard->context->ClientFormatList(clipboard->context, &formatList);
 }
 
-static void xf_cliprdr_get_requested_targets(xfClipboard* clipboard)
+static void xf_cliprdr_get_requested_targets(xfClipboard* clipboard, BOOL force)
 {
 	UINT32 numFormats = 0;
 	CLIPRDR_FORMAT* formats = xf_cliprdr_get_client_formats(clipboard, &numFormats);
-	xf_cliprdr_send_format_list(clipboard, formats, numFormats);
+	xf_cliprdr_send_format_list(clipboard, formats, numFormats, force);
 	xf_cliprdr_free_formats(formats, numFormats);
 }
 
@@ -1253,13 +1260,18 @@ static BOOL xf_cliprdr_process_selection_notify(xfClipboard* clipboard,
 
 	if (xevent->target == clipboard->targets[1])
 	{
+		const BOOL force = clipboard->forceSelectionPending;
+		clipboard->forceSelectionPending = FALSE;
 		if (xevent->property == None)
 		{
-			xf_cliprdr_send_client_format_list(clipboard);
+			if (force)
+				WLog_WARN(TAG, "clipboard owner did not provide TARGETS for forced copy");
+			else
+				xf_cliprdr_send_client_format_list(clipboard);
 		}
 		else
 		{
-			xf_cliprdr_get_requested_targets(clipboard);
+			xf_cliprdr_get_requested_targets(clipboard, force);
 		}
 
 		return TRUE;
@@ -1847,7 +1859,7 @@ static UINT xf_cliprdr_send_client_format_list(xfClipboard* clipboard)
 	UINT32 numFormats = 0;
 	CLIPRDR_FORMAT* formats = xf_cliprdr_get_client_formats(clipboard, &numFormats);
 
-	const UINT ret = xf_cliprdr_send_format_list(clipboard, formats, numFormats);
+	const UINT ret = xf_cliprdr_send_format_list(clipboard, formats, numFormats, FALSE);
 
 	if (clipboard->owner && clipboard->owner != xfc->drawable)
 	{
@@ -1860,6 +1872,45 @@ static UINT xf_cliprdr_send_client_format_list(xfClipboard* clipboard)
 	xf_cliprdr_free_formats(formats, numFormats);
 
 	return ret;
+}
+
+BOOL xf_cliprdr_force_local_to_remote(xfContext* xfc)
+{
+	if (!xfc || !xfc->clipboard)
+		return FALSE;
+
+	xfClipboard* clipboard = xfc->clipboard;
+	if (!clipboard->sync || !clipboard->context ||
+	    !clipboard->context->ClientFormatListForce)
+	{
+		WLog_WARN(TAG, "clipboard channel is not ready for a forced local-to-remote copy");
+		return FALSE;
+	}
+
+	(void)xf_cliprdr_update_owner(clipboard);
+	if (clipboard->owner && (clipboard->owner != xfc->drawable))
+	{
+		clipboard->forceSelectionPending = TRUE;
+		LogDynAndXConvertSelection(xfc->log, xfc->display, clipboard->clipboard_atom,
+		                           clipboard->targets[1], clipboard->property_atom, xfc->drawable,
+		                           CurrentTime);
+		WLog_INFO(TAG, "requesting local clipboard formats for hotkey push");
+		return TRUE;
+	}
+
+	UINT32 numFormats = 0;
+	CLIPRDR_FORMAT* formats = xf_cliprdr_get_client_formats(clipboard, &numFormats);
+	const UINT rc = xf_cliprdr_send_format_list(clipboard, formats, numFormats, TRUE);
+	xf_cliprdr_free_formats(formats, numFormats);
+
+	if (rc != CHANNEL_RC_OK)
+	{
+		WLog_ERR(TAG, "failed to force local clipboard announcement: 0x%08" PRIx32, rc);
+		return FALSE;
+	}
+
+	WLog_INFO(TAG, "local clipboard announced to this RDP session by hotkey");
+	return TRUE;
 }
 
 /**

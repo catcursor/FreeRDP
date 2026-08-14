@@ -1,0 +1,110 @@
+name: Debian X11 clipboard build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/debian-x11-clipboard.yml"
+      - "channels/cliprdr/**"
+      - "client/X11/**"
+      - "cmake/**"
+      - "include/freerdp/client/cliprdr.h"
+      - "packaging/deb/freerdp-clipboard/**"
+      - "CMakeLists.txt"
+  pull_request:
+    paths:
+      - ".github/workflows/debian-x11-clipboard.yml"
+      - "channels/cliprdr/**"
+      - "client/X11/**"
+      - "cmake/**"
+      - "include/freerdp/client/cliprdr.h"
+      - "packaging/deb/freerdp-clipboard/**"
+      - "CMakeLists.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  debian-amd64:
+    runs-on: ubuntu-24.04
+    container: debian:bookworm
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            cmake \
+            dpkg-dev \
+            git \
+            libssl-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxdamage-dev \
+            libxext-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxkbcommon-dev \
+            libxkbfile-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            libxtst-dev \
+            ninja-build \
+            pkg-config \
+            zlib1g-dev
+
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Configure X11 client
+        run: |
+          cmake -S . -B build-debian-clipboard -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/opt/freerdp-clipboard \
+            -DWITH_BINARY_VERSIONING=ON \
+            -DWITH_X11=ON \
+            -DWITH_WAYLAND=OFF \
+            -DWITH_CLIENT_SDL=OFF \
+            -DWITH_SERVER=OFF \
+            -DWITH_SAMPLE=OFF \
+            -DWITH_FFMPEG=OFF \
+            -DWITH_DSP_FFMPEG=OFF \
+            -DWITH_VIDEO_FFMPEG=OFF \
+            -DWITH_SWSCALE=OFF \
+            -DWITH_ALSA=OFF \
+            -DWITH_PULSE=OFF \
+            -DWITH_OSS=OFF \
+            -DWITH_CUPS=OFF \
+            -DWITH_PCSC=OFF \
+            -DWITH_KRB5=OFF \
+            -DWITH_FUSE=OFF \
+            -DWITH_MANPAGES=OFF \
+            -DWITH_UNICODE_BUILTIN=ON \
+            -DWITH_CLANG_FORMAT=OFF \
+            -DBUILD_TESTING=OFF \
+            -DCHANNEL_URBDRC=OFF \
+            -DCHANNEL_URBDRC_CLIENT=OFF
+
+      - name: Build and stage installation
+        run: |
+          cmake --build build-debian-clipboard --parallel 2
+          DESTDIR="$GITHUB_WORKSPACE/package-root" cmake --install build-debian-clipboard
+          test -x package-root/opt/freerdp-clipboard/bin/xfreerdp3
+
+      - name: Build Debian package
+        env:
+          PACKAGE_VERSION: 3.30.1~dev0.clipboard.${{ github.run_number }}+${{ github.sha }}
+        run: bash packaging/deb/freerdp-clipboard/build-package.sh package-root dist
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: freerdp3-clipboard-debian-amd64-${{ github.sha }}
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14

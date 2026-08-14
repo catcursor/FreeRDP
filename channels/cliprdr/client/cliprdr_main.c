@@ -39,6 +39,69 @@
 #include "cliprdr_format.h"
 #include "../cliprdr_common.h"
 
+static void cliprdr_revoke_forced_formats_unsafe(cliprdrPlugin* cliprdr)
+{
+	WINPR_ASSERT(cliprdr);
+	free(cliprdr->forcedFormats);
+	cliprdr->forcedFormats = nullptr;
+	cliprdr->numForcedFormats = 0;
+	cliprdr->forceLocalToRemote = FALSE;
+	cliprdr->forcedResponseAllowed = FALSE;
+}
+
+static void cliprdr_revoke_forced_formats(cliprdrPlugin* cliprdr)
+{
+	WINPR_ASSERT(cliprdr);
+	EnterCriticalSection(&cliprdr->forceLock);
+	cliprdr_revoke_forced_formats_unsafe(cliprdr);
+	LeaveCriticalSection(&cliprdr->forceLock);
+}
+
+static void cliprdr_reset_forced_transfer(cliprdrPlugin* cliprdr)
+{
+	WINPR_ASSERT(cliprdr);
+	EnterCriticalSection(&cliprdr->forceLock);
+	cliprdr_revoke_forced_formats_unsafe(cliprdr);
+	cliprdr->forcedRequestOutstanding = FALSE;
+	LeaveCriticalSection(&cliprdr->forceLock);
+}
+
+BOOL cliprdr_accept_forced_format_request(cliprdrPlugin* cliprdr, UINT32 formatId)
+{
+	WINPR_ASSERT(cliprdr);
+	BOOL allowed = FALSE;
+	EnterCriticalSection(&cliprdr->forceLock);
+	if (!cliprdr->forceLocalToRemote || cliprdr->forcedRequestOutstanding)
+		goto out;
+
+	for (UINT32 x = 0; x < cliprdr->numForcedFormats; x++)
+	{
+		if (cliprdr->forcedFormats[x] == formatId)
+		{
+			allowed = TRUE;
+			free(cliprdr->forcedFormats);
+			cliprdr->forcedFormats = nullptr;
+			cliprdr->numForcedFormats = 0;
+			cliprdr->forceLocalToRemote = FALSE;
+			cliprdr->forcedRequestOutstanding = TRUE;
+			cliprdr->forcedResponseAllowed = TRUE;
+			break;
+		}
+	}
+out:
+	LeaveCriticalSection(&cliprdr->forceLock);
+	return allowed;
+}
+
+void cliprdr_cancel_forced_format_request(cliprdrPlugin* cliprdr)
+{
+	WINPR_ASSERT(cliprdr);
+	EnterCriticalSection(&cliprdr->forceLock);
+	cliprdr->forcedRequestOutstanding = FALSE;
+	cliprdr->forcedResponseAllowed = FALSE;
+	LeaveCriticalSection(&cliprdr->forceLock);
+}
+
 const char type_FileGroupDescriptorW[] = "FileGroupDescriptorW";
 const char type_FileContents[] = "FileContents";
 
@@ -661,8 +724,8 @@ static UINT cliprdr_temp_directory(CliprdrClientContext* context,
  *
  * @return 0 on success, otherwise a Win32 error code
  */
-static UINT cliprdr_client_format_list(CliprdrClientContext* context,
-                                       const CLIPRDR_FORMAT_LIST* formatList)
+static UINT cliprdr_client_format_list_ex(CliprdrClientContext* context,
+                                          const CLIPRDR_FORMAT_LIST* formatList, BOOL force)
 {
 	wStream* s = nullptr;
 	cliprdrPlugin* cliprdr = nullptr;
@@ -672,6 +735,8 @@ static UINT cliprdr_client_format_list(CliprdrClientContext* context,
 
 	cliprdr = (cliprdrPlugin*)context->handle;
 	WINPR_ASSERT(cliprdr);
+	if (!force)
+		cliprdr_revoke_forced_formats(cliprdr);
 
 	{
 		const UINT32 mask = CB_RESPONSE_OK | CB_RESPONSE_FAIL;
@@ -682,10 +747,29 @@ static UINT cliprdr_client_format_list(CliprdrClientContext* context,
 			           formatList->common.msgFlags & mask);
 	}
 
-	const UINT32 mask =
+	UINT32 mask =
 	    freerdp_settings_get_uint32(context->rdpcontext->settings, FreeRDP_ClipboardFeatureMask);
+	if (force)
+	{
+		mask |= CLIPRDR_FLAG_LOCAL_TO_REMOTE;
+		mask &= ~CLIPRDR_FLAG_LOCAL_TO_REMOTE_FILES;
+	}
 	CLIPRDR_FORMAT_LIST filterList = cliprdr_filter_format_list(
 	    formatList, mask, CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_LOCAL_TO_REMOTE_FILES);
+	const BOOL forcedFormatsAvailable = force && (filterList.numFormats > 0);
+	const UINT32 numForcedFormats = forcedFormatsAvailable ? filterList.numFormats : 0;
+	UINT32* forcedFormats = nullptr;
+	if (forcedFormatsAvailable)
+	{
+		forcedFormats = calloc(filterList.numFormats, sizeof(UINT32));
+		if (!forcedFormats)
+		{
+			cliprdr_free_format_list(&filterList);
+			return CHANNEL_RC_NO_MEMORY;
+		}
+		for (UINT32 x = 0; x < filterList.numFormats; x++)
+			forcedFormats[x] = filterList.formats[x].formatId;
+	}
 
 	/* Allow initial format list from monitor ready, but ignore later attempts */
 	if ((filterList.numFormats == 0) && cliprdr->initialFormatListSent)
@@ -714,11 +798,48 @@ static UINT cliprdr_client_format_list(CliprdrClientContext* context,
 
 	if (!s)
 	{
+		free(forcedFormats);
 		WLog_Print(cliprdr->log, WLOG_ERROR, "cliprdr_packet_format_list_new failed!");
 		return ERROR_INTERNAL_ERROR;
 	}
 
-	return cliprdr_packet_send(cliprdr, s);
+	UINT rc = CHANNEL_RC_OK;
+	if (forcedFormatsAvailable)
+	{
+		EnterCriticalSection(&cliprdr->forceLock);
+		if (cliprdr->forcedRequestOutstanding)
+		{
+			LeaveCriticalSection(&cliprdr->forceLock);
+			Stream_Free(s, TRUE);
+			free(forcedFormats);
+			return ERROR_BUSY;
+		}
+		cliprdr_revoke_forced_formats_unsafe(cliprdr);
+		cliprdr->forcedFormats = forcedFormats;
+		cliprdr->numForcedFormats = numForcedFormats;
+		cliprdr->forceLocalToRemote = TRUE;
+		forcedFormats = nullptr;
+		rc = cliprdr_packet_send(cliprdr, s);
+		if (rc != CHANNEL_RC_OK)
+			cliprdr_revoke_forced_formats_unsafe(cliprdr);
+		LeaveCriticalSection(&cliprdr->forceLock);
+	}
+	else
+		rc = cliprdr_packet_send(cliprdr, s);
+	free(forcedFormats);
+	return rc;
+}
+
+static UINT cliprdr_client_format_list(CliprdrClientContext* context,
+                                       const CLIPRDR_FORMAT_LIST* formatList)
+{
+	return cliprdr_client_format_list_ex(context, formatList, FALSE);
+}
+
+static UINT cliprdr_client_format_list_force(CliprdrClientContext* context,
+                                             const CLIPRDR_FORMAT_LIST* formatList)
+{
+	return cliprdr_client_format_list_ex(context, formatList, TRUE);
 }
 
 /**
@@ -863,22 +984,40 @@ cliprdr_client_format_data_response(CliprdrClientContext* context,
 	cliprdrPlugin* cliprdr = (cliprdrPlugin*)context->handle;
 	WINPR_ASSERT(cliprdr);
 
-	WINPR_ASSERT(
-	    (freerdp_settings_get_uint32(context->rdpcontext->settings, FreeRDP_ClipboardFeatureMask) &
-	     (CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_LOCAL_TO_REMOTE_FILES)) != 0);
+	const UINT32 mask =
+	    freerdp_settings_get_uint32(context->rdpcontext->settings, FreeRDP_ClipboardFeatureMask);
+	EnterCriticalSection(&cliprdr->forceLock);
+	const BOOL directionAllowed =
+	    (mask & (CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_LOCAL_TO_REMOTE_FILES)) != 0;
+	const BOOL forcedResponseAllowed =
+	    cliprdr->forcedRequestOutstanding && cliprdr->forcedResponseAllowed;
+	if (!directionAllowed && !forcedResponseAllowed)
+	{
+		cliprdr->forcedRequestOutstanding = FALSE;
+		cliprdr->forcedResponseAllowed = FALSE;
+		LeaveCriticalSection(&cliprdr->forceLock);
+		return cliprdr_send_error_response(cliprdr, CB_FORMAT_DATA_RESPONSE);
+	}
 
 	wStream* s = cliprdr_packet_new(CB_FORMAT_DATA_RESPONSE, formatDataResponse->common.msgFlags,
 	                                formatDataResponse->common.dataLen);
 
 	if (!s)
 	{
+		cliprdr->forcedRequestOutstanding = FALSE;
+		cliprdr_revoke_forced_formats_unsafe(cliprdr);
+		LeaveCriticalSection(&cliprdr->forceLock);
 		WLog_Print(cliprdr->log, WLOG_ERROR, "cliprdr_packet_new failed!");
 		return ERROR_INTERNAL_ERROR;
 	}
 
 	Stream_Write(s, formatDataResponse->requestedFormatData, formatDataResponse->common.dataLen);
 	WLog_Print(cliprdr->log, WLOG_DEBUG, "ClientFormatDataResponse");
-	return cliprdr_packet_send(cliprdr, s);
+	const UINT rc = cliprdr_packet_send(cliprdr, s);
+	cliprdr->forcedRequestOutstanding = FALSE;
+	cliprdr_revoke_forced_formats_unsafe(cliprdr);
+	LeaveCriticalSection(&cliprdr->forceLock);
+	return rc;
 }
 
 /**
@@ -1045,6 +1184,7 @@ static UINT cliprdr_virtual_channel_event_disconnected(cliprdrPlugin* cliprdr)
 	UINT rc = 0;
 
 	WINPR_ASSERT(cliprdr);
+	cliprdr_reset_forced_transfer(cliprdr);
 
 	channel_client_quit_handler(cliprdr->MsgsHandle);
 	cliprdr->MsgsHandle = nullptr;
@@ -1078,6 +1218,8 @@ static UINT cliprdr_virtual_channel_event_terminated(cliprdrPlugin* cliprdr)
 	WINPR_ASSERT(cliprdr);
 
 	cliprdr->InitHandle = nullptr;
+	cliprdr_reset_forced_transfer(cliprdr);
+	DeleteCriticalSection(&cliprdr->forceLock);
 	free(cliprdr->context);
 	free(cliprdr);
 	return CHANNEL_RC_OK;
@@ -1152,6 +1294,7 @@ FREERDP_ENTRY_POINT(BOOL VCAPITYPE VirtualChannelEntryEx(PCHANNEL_ENTRY_POINTS_E
 	}
 
 	cliprdr->log = log;
+	InitializeCriticalSection(&cliprdr->forceLock);
 	cliprdr->channelDef.options = CHANNEL_OPTION_INITIALIZED | CHANNEL_OPTION_ENCRYPT_RDP |
 	                              CHANNEL_OPTION_COMPRESS_RDP | CHANNEL_OPTION_SHOW_PROTOCOL;
 	(void)sprintf_s(cliprdr->channelDef.name, ARRAYSIZE(cliprdr->channelDef.name),
@@ -1168,6 +1311,7 @@ FREERDP_ENTRY_POINT(BOOL VCAPITYPE VirtualChannelEntryEx(PCHANNEL_ENTRY_POINTS_E
 		if (!context)
 		{
 			WLog_Print(cliprdr->log, WLOG_ERROR, "calloc failed!");
+			DeleteCriticalSection(&cliprdr->forceLock);
 			free(cliprdr);
 			return FALSE;
 		}
@@ -1177,6 +1321,7 @@ FREERDP_ENTRY_POINT(BOOL VCAPITYPE VirtualChannelEntryEx(PCHANNEL_ENTRY_POINTS_E
 		context->ClientCapabilities = cliprdr_client_capabilities;
 		context->TempDirectory = cliprdr_temp_directory;
 		context->ClientFormatList = cliprdr_client_format_list;
+		context->ClientFormatListForce = cliprdr_client_format_list_force;
 		context->ClientFormatListResponse = cliprdr_client_format_list_response;
 		context->ClientLockClipboardData = cliprdr_client_lock_clipboard_data;
 		context->ClientUnlockClipboardData = cliprdr_client_unlock_clipboard_data;
@@ -1201,6 +1346,7 @@ FREERDP_ENTRY_POINT(BOOL VCAPITYPE VirtualChannelEntryEx(PCHANNEL_ENTRY_POINTS_E
 		WLog_Print(cliprdr->log, WLOG_ERROR, "pVirtualChannelInit failed with %s [%08" PRIX32 "]",
 		           WTSErrorToString(rc), rc);
 		free(cliprdr->context);
+		DeleteCriticalSection(&cliprdr->forceLock);
 		free(cliprdr);
 		return FALSE;
 	}

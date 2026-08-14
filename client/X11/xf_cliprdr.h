@@ -40,4 +40,6 @@ void xf_cliprdr_uninit(xfContext* xfc, CliprdrClientContext* cliprdr);
 
 void xf_cliprdr_handle_xevent(xfContext* xfc, const XEvent* event);
 
+BOOL xf_cliprdr_force_local_to_remote(xfContext* xfc);
+
 #endif /* FREERDP_CLIENT_X11_CLIPRDR_H */

@@ -48,6 +48,12 @@ typedef struct
 	BOOL canLockClipData;
 	BOOL hasHugeFileSupport;
 	BOOL initialFormatListSent;
+	BOOL forceLocalToRemote;
+	BOOL forcedRequestOutstanding;
+	BOOL forcedResponseAllowed;
+	UINT32 numForcedFormats;
+	UINT32* forcedFormats;
+	CRITICAL_SECTION forceLock;
 } cliprdrPlugin;
 
 WINPR_ATTR_NODISCARD
@@ -55,6 +61,11 @@ FREERDP_LOCAL CliprdrClientContext* cliprdr_get_client_interface(cliprdrPlugin* 
 
 WINPR_ATTR_NODISCARD
 FREERDP_LOCAL UINT cliprdr_send_error_response(cliprdrPlugin* cliprdr, UINT16 type);
+
+WINPR_ATTR_NODISCARD
+FREERDP_LOCAL BOOL cliprdr_accept_forced_format_request(cliprdrPlugin* cliprdr, UINT32 formatId);
+
+FREERDP_LOCAL void cliprdr_cancel_forced_format_request(cliprdrPlugin* cliprdr);
 
 FREERDP_LOCAL extern const char type_FileGroupDescriptorW[];
 

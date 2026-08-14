@@ -108,6 +108,10 @@ extern "C"
 
 		UINT32 lastRequestedFormatId;
 		rdpContext* rdpcontext;
+
+		/* Advertise non-file local clipboard formats once, even when the configured
+		 * clipboard direction disables local-to-remote transfers. */
+		WINPR_ATTR_NODISCARD pcCliprdrClientFormatList ClientFormatListForce;
 	};
 
 	typedef struct

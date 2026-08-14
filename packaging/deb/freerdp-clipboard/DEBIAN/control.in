@@ -1,0 +1,13 @@
+Package: freerdp3-clipboard
+Version: @PACKAGE_VERSION@
+Section: x11
+Priority: optional
+Architecture: amd64
+Maintainer: catcursor <noreply@github.com>
+Depends: libc6, libssl3 | libssl3t64, libx11-6, libxcursor1, libxdamage1, libxext6, libxfixes3, libxi6, libxinerama1, libxkbcommon0, libxkbfile1, libxrandr2, libxrender1, libxtst6, zlib1g
+Installed-Size: @INSTALLED_SIZE@
+Homepage: https://github.com/catcursor/FreeRDP
+Description: Isolated FreeRDP 3 X11 client with explicit clipboard push hotkey
+ Installs under /opt/freerdp-clipboard and provides xfreerdp3-clipboard.
+ Ctrl+Shift+V explicitly announces non-file host clipboard formats to the
+ active RDP session while normal local-to-remote clipboard transfer is disabled.
