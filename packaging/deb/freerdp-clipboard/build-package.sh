@@ -9,10 +9,15 @@ fi
 package_root=$1
 output_directory=$2
 package_version=${PACKAGE_VERSION:?PACKAGE_VERSION must be set}
+package_variant=${PACKAGE_VARIANT:?PACKAGE_VARIANT must be set}
 script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 if [[ ! $package_version =~ ^[0-9A-Za-z.+:~-]+$ ]]; then
 	echo "invalid Debian package version: $package_version" >&2
+	exit 2
+fi
+if [[ ! $package_variant =~ ^[0-9a-z]+$ ]]; then
+	echo "invalid package variant: $package_variant" >&2
 	exit 2
 fi
 
@@ -27,9 +32,9 @@ sed \
 	-e "s/@INSTALLED_SIZE@/$installed_size/g" \
 	"$script_directory/DEBIAN/control.in" > "$package_root/DEBIAN/control"
 
-package_file="$output_directory/freerdp3-clipboard_${package_version}_amd64.deb"
+package_file="$output_directory/freerdp3-clipboard-${package_variant}_${package_version}_amd64.deb"
 dpkg-deb --root-owner-group --build "$package_root" "$package_file"
 (
 	cd "$output_directory"
-	sha256sum "$(basename -- "$package_file")" > SHA256SUMS
+	sha256sum "$(basename -- "$package_file")" > "SHA256SUMS-$package_variant"
 )

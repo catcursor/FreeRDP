@@ -4,10 +4,10 @@ Section: x11
 Priority: optional
 Architecture: amd64
 Maintainer: catcursor <noreply@github.com>
-Depends: libc6, libssl3 | libssl3t64, libx11-6, libxcursor1, libxdamage1, libxext6, libxfixes3, libxi6, libxinerama1, libxkbcommon0, libxkbfile1, libxrandr2, libxrender1, libxtst6, zlib1g
+Depends: libc6, libasound2 | libasound2t64, libavcodec61 | libavcodec60, libavformat61 | libavformat60, libavutil59 | libavutil58, libcairo2, libcups2 | libcups2t64, libfido2-1, libfuse3-3, libgsm1, libkrb5-3, libopus0, libpcsclite1, libpulse0, libsoxr0, libssl3 | libssl3t64, libswresample5 | libswresample4, libswscale8 | libswscale7, libsystemd0, libudev1, liburiparser1, libusb-1.0-0, libv4l-0, libwebp7, libx11-6, libxcursor1, libxdamage1, libxext6, libxfixes3, libxi6, libxinerama1, libxkbcommon0, libxkbfile1, libxrandr2, libxrender1, libxtst6, libxv1, zlib1g
 Installed-Size: @INSTALLED_SIZE@
 Homepage: https://github.com/catcursor/FreeRDP
 Description: Isolated FreeRDP 3 X11 client with explicit clipboard push hotkey
  Installs under /opt/freerdp-clipboard and provides xfreerdp3-clipboard.
- Ctrl+Shift+V explicitly announces non-file host clipboard formats to the
- active RDP session while normal local-to-remote clipboard transfer is disabled.
+ Win/Super+Shift+V explicitly sends and pastes non-file host clipboard data in
+ the active RDP session while normal local-to-remote transfer remains disabled.

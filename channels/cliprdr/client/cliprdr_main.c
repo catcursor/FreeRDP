@@ -757,6 +757,11 @@ static UINT cliprdr_client_format_list_ex(CliprdrClientContext* context,
 	CLIPRDR_FORMAT_LIST filterList = cliprdr_filter_format_list(
 	    formatList, mask, CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_LOCAL_TO_REMOTE_FILES);
 	const BOOL forcedFormatsAvailable = force && (filterList.numFormats > 0);
+	if (force && !forcedFormatsAvailable)
+	{
+		cliprdr_free_format_list(&filterList);
+		return ERROR_NOT_FOUND;
+	}
 	const UINT32 numForcedFormats = forcedFormatsAvailable ? filterList.numFormats : 0;
 	UINT32* forcedFormats = nullptr;
 	if (forcedFormatsAvailable)

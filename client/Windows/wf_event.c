@@ -54,6 +54,7 @@ static BOOL g_flipping_in = FALSE;
 static BOOL g_flipping_out = FALSE;
 
 static BOOL g_keystates[256] = WINPR_C_ARRAY_INIT;
+static BOOL g_virtual_keystates[256] = WINPR_C_ARRAY_INIT;
 
 static BOOL ctrl_down(void)
 {
@@ -64,6 +65,22 @@ static BOOL alt_ctrl_down(void)
 {
 	const BOOL altDown = g_keystates[VK_MENU] || g_keystates[VK_LMENU] || g_keystates[VK_RMENU];
 	return altDown && ctrl_down();
+}
+
+static BOOL win_shift_down(void)
+{
+	const BOOL winDown = g_virtual_keystates[VK_LWIN] || g_virtual_keystates[VK_RWIN];
+	const BOOL shiftDown = g_virtual_keystates[VK_LSHIFT] || g_virtual_keystates[VK_RSHIFT];
+	return winDown && shiftDown;
+}
+
+static void release_clipboard_push_modifiers(rdpInput* input)
+{
+	WINPR_ASSERT(input);
+	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_LSHIFT);
+	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_RSHIFT);
+	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_LWIN);
+	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_RWIN);
 }
 
 LRESULT CALLBACK wf_ll_kbd_proc(int nCode, WPARAM wParam, LPARAM lParam)
@@ -117,6 +134,8 @@ LRESULT CALLBACK wf_ll_kbd_proc(int nCode, WPARAM wParam, LPARAM lParam)
 
 				if (!wfc || !p)
 					return 1;
+				g_virtual_keystates[p->vkCode & 0xFF] =
+				    (wParam == WM_KEYDOWN) || (wParam == WM_SYSKEYDOWN);
 
 				input = wfc->common.context.input;
 				rdp_scancode = MAKE_RDP_SCANCODE((BYTE)p->scanCode, p->flags & LLKHF_EXTENDED);
@@ -136,6 +155,24 @@ LRESULT CALLBACK wf_ll_kbd_proc(int nCode, WPARAM wParam, LPARAM lParam)
 				}
 				DEBUG_KBD("keydown %d scanCode 0x%08lX flags 0x%08lX vkCode 0x%08lX",
 				          (wParam == WM_KEYDOWN), p->scanCode, p->flags, p->vkCode);
+
+				if (p->vkCode == 'V')
+				{
+					const BOOL down = (wParam == WM_KEYDOWN) || (wParam == WM_SYSKEYDOWN);
+					if (wfc->clipboardPushVDown)
+					{
+						if (!down)
+							wfc->clipboardPushVDown = FALSE;
+						return 1;
+					}
+
+					if (down && win_shift_down() && wf_cliprdr_force_local_to_remote(wfc))
+					{
+						release_clipboard_push_modifiers(input);
+						wfc->clipboardPushVDown = TRUE;
+						return 1;
+					}
+				}
 
 				if (wfc->fullscreen_toggle && (p->vkCode == VK_RETURN || p->vkCode == VK_CANCEL))
 				{
@@ -787,6 +824,8 @@ LRESULT CALLBACK wf_event_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam
 
 		case WM_SETFOCUS:
 			DEBUG_KBD("getting focus %X", hWnd);
+			ZeroMemory(g_virtual_keystates, sizeof(g_virtual_keystates));
+			wfc->clipboardPushVDown = FALSE;
 
 			(void)freerdp_settings_set_bool(wfc->common.context.settings, FreeRDP_SuspendInput,
 			                                FALSE);
@@ -800,6 +839,8 @@ LRESULT CALLBACK wf_event_proc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam
 			break;
 
 		case WM_KILLFOCUS:
+			ZeroMemory(g_virtual_keystates, sizeof(g_virtual_keystates));
+			wfc->clipboardPushVDown = FALSE;
 			(void)freerdp_settings_set_bool(wfc->common.context.settings, FreeRDP_SuspendInput,
 			                                TRUE);
 

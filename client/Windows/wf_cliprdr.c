@@ -38,6 +38,8 @@
 #include <winpr/stream.h>
 
 #include <freerdp/log.h>
+#include <freerdp/input.h>
+#include <freerdp/scancode.h>
 #include <freerdp/client/cliprdr.h>
 
 #include <strsafe.h>
@@ -138,6 +140,7 @@ typedef struct
 	fnAddClipboardFormatListener AddClipboardFormatListener;
 	fnRemoveClipboardFormatListener RemoveClipboardFormatListener;
 	fnGetUpdatedClipboardFormats GetUpdatedClipboardFormats;
+	LONG forcePastePending;
 } wfClipboard;
 
 #define WM_CLIPRDR_MESSAGE (WM_USER + 156)
@@ -1212,7 +1215,7 @@ static BOOL cliprdr_GetUpdatedClipboardFormats(wfClipboard* clipboard, PUINT lpu
 	return TRUE;
 }
 
-static UINT cliprdr_send_format_list(wfClipboard* clipboard)
+static UINT cliprdr_send_format_list_ex(wfClipboard* clipboard, BOOL force)
 {
 	UINT rc;
 	int count = 0;
@@ -1229,19 +1232,22 @@ static UINT cliprdr_send_format_list(wfClipboard* clipboard)
 	if (try_open_clipboard(clipboard->hwnd))
 	{
 		count = CountClipboardFormats();
-		numFormats = (UINT32)count;
-		formats = (CLIPRDR_FORMAT*)calloc(numFormats, sizeof(CLIPRDR_FORMAT));
-
-		if (!formats)
+		const BOOL hasFiles = IsClipboardFormatAvailable(CF_HDROP);
+		numFormats = (UINT32)count + (hasFiles ? 1U : 0U);
+		if (numFormats > 0)
 		{
-			CloseClipboard();
-			return CHANNEL_RC_NO_MEMORY;
+			formats = (CLIPRDR_FORMAT*)calloc(numFormats, sizeof(CLIPRDR_FORMAT));
+			if (!formats)
+			{
+				CloseClipboard();
+				return CHANNEL_RC_NO_MEMORY;
+			}
 		}
 
 		{
 			UINT32 index = 0;
 
-			if (IsClipboardFormatAvailable(CF_HDROP))
+			if (hasFiles)
 			{
 				formats[index++].formatId = RegisterClipboardFormat(CFSTR_FILEDESCRIPTORW);
 				formats[index++].formatId = RegisterClipboardFormat(CFSTR_FILECONTENTS);
@@ -1273,13 +1279,55 @@ static UINT cliprdr_send_format_list(wfClipboard* clipboard)
 	formatList.numFormats = numFormats;
 	formatList.formats = formats;
 	formatList.common.msgType = CB_FORMAT_LIST;
-	rc = clipboard->context->ClientFormatList(clipboard->context, &formatList);
+	if (force)
+	{
+		WINPR_ASSERT(clipboard->context->ClientFormatListForce);
+		rc = clipboard->context->ClientFormatListForce(clipboard->context, &formatList);
+	}
+	else
+	{
+		WINPR_ASSERT(clipboard->context->ClientFormatList);
+		rc = clipboard->context->ClientFormatList(clipboard->context, &formatList);
+	}
 
 	for (UINT index = 0; index < numFormats; index++)
 		free(formats[index].formatName);
 
 	free(formats);
 	return rc;
+}
+
+static UINT cliprdr_send_format_list(wfClipboard* clipboard)
+{
+	return cliprdr_send_format_list_ex(clipboard, FALSE);
+}
+
+BOOL wf_cliprdr_force_local_to_remote(wfContext* wfc)
+{
+	if (!wfc || !wfc->clipboard)
+		return FALSE;
+
+	wfClipboard* clipboard = wfc->clipboard;
+	if (!clipboard->sync || !clipboard->context ||
+	    !clipboard->context->ClientFormatListForce)
+	{
+		WLog_WARN(TAG, "clipboard channel is not ready for a forced local-to-remote copy");
+		return FALSE;
+	}
+
+	if (InterlockedCompareExchange(&clipboard->forcePastePending, TRUE, FALSE) != FALSE)
+		return TRUE;
+
+	const UINT rc = cliprdr_send_format_list_ex(clipboard, TRUE);
+	if (rc != CHANNEL_RC_OK)
+	{
+		InterlockedExchange(&clipboard->forcePastePending, FALSE);
+		WLog_ERR(TAG, "failed to force local clipboard announcement: 0x%08" PRIx32, rc);
+		return FALSE;
+	}
+
+	WLog_INFO(TAG, "local clipboard announced to this RDP session by hotkey");
+	return TRUE;
 }
 
 static UINT cliprdr_send_data_request(wfClipboard* clipboard, UINT32 formatId)
@@ -1938,11 +1986,28 @@ static UINT
 wf_cliprdr_server_format_list_response(CliprdrClientContext* context,
                                        const CLIPRDR_FORMAT_LIST_RESPONSE* formatListResponse)
 {
-	(void)context;
-	(void)formatListResponse;
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(formatListResponse);
+
+	wfClipboard* clipboard = (wfClipboard*)context->custom;
+	WINPR_ASSERT(clipboard);
 
 	if (formatListResponse->common.msgFlags != CB_RESPONSE_OK)
 		WLog_WARN(TAG, "format list update failed");
+
+	if (InterlockedExchange(&clipboard->forcePastePending, FALSE) == FALSE)
+		return CHANNEL_RC_OK;
+
+	if (formatListResponse->common.msgFlags != CB_RESPONSE_OK)
+		return CHANNEL_RC_OK;
+
+	rdpInput* input = clipboard->wfc->common.context.input;
+	WINPR_ASSERT(input);
+	(void)freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, RDP_SCANCODE_LSHIFT);
+	(void)freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, RDP_SCANCODE_INSERT);
+	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_INSERT);
+	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_LSHIFT);
+	WLog_INFO(TAG, "forced clipboard accepted; sent Shift+Insert to the remote session");
 
 	return CHANNEL_RC_OK;
 }

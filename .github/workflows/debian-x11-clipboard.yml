@@ -1,4 +1,4 @@
-name: Debian X11 clipboard build
+name: Cross-platform clipboard builds
 
 on:
   workflow_dispatch:
@@ -7,30 +7,45 @@ on:
       - ".github/workflows/debian-x11-clipboard.yml"
       - "channels/cliprdr/**"
       - "client/X11/**"
+      - "client/Windows/**"
       - "cmake/**"
       - "include/freerdp/client/cliprdr.h"
       - "packaging/deb/freerdp-clipboard/**"
+      - "packaging/windows/freerdp-clipboard/**"
       - "CMakeLists.txt"
   pull_request:
     paths:
       - ".github/workflows/debian-x11-clipboard.yml"
       - "channels/cliprdr/**"
       - "client/X11/**"
+      - "client/Windows/**"
       - "cmake/**"
       - "include/freerdp/client/cliprdr.h"
       - "packaging/deb/freerdp-clipboard/**"
+      - "packaging/windows/freerdp-clipboard/**"
       - "CMakeLists.txt"
 
 permissions:
   contents: write
 
 jobs:
-  debian-amd64:
+  linux-amd64:
+    name: ${{ matrix.label }} amd64
     runs-on: ubuntu-24.04
-    container: debian:bookworm
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: debian13
+            label: Debian 13
+            container: debian:trixie
+          - id: ubuntu2404
+            label: Ubuntu 24.04
+            container: ubuntu:24.04
 
     steps:
-      - name: Install build dependencies
+      - name: Install full X11 client build dependencies
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -39,7 +54,33 @@ jobs:
             cmake \
             dpkg-dev \
             git \
+            libasound2-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libcairo2-dev \
+            libcbor-dev \
+            libcups2-dev \
+            libdbus-glib-1-dev \
+            libfido2-dev \
+            libfuse3-dev \
+            libgsm1-dev \
+            libjansson-dev \
+            libjpeg-dev \
+            libkrb5-dev \
+            libopus-dev \
+            libpam0g-dev \
+            libpcsclite-dev \
+            libpulse-dev \
+            libsoxr-dev \
             libssl-dev \
+            libswresample-dev \
+            libswscale-dev \
+            libsystemd-dev \
+            liburiparser-dev \
+            libusb-1.0-0-dev \
+            libv4l-dev \
+            libwebp-dev \
             libx11-dev \
             libxcursor-dev \
             libxdamage-dev \
@@ -52,16 +93,18 @@ jobs:
             libxrandr-dev \
             libxrender-dev \
             libxtst-dev \
+            libxv-dev \
             ninja-build \
             pkg-config \
+            uuid-dev \
             zlib1g-dev
 
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Configure X11 client
+      - name: Configure full X11 client
         run: |
-          cmake -S . -B build-debian-clipboard -G Ninja \
+          cmake -S . -B build-linux-clipboard -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/opt/freerdp-clipboard \
             -DWITH_BINARY_VERSIONING=ON \
@@ -70,57 +113,159 @@ jobs:
             -DWITH_CLIENT_SDL=OFF \
             -DWITH_SERVER=OFF \
             -DWITH_SAMPLE=OFF \
-            -DWITH_FFMPEG=OFF \
-            -DWITH_DSP_FFMPEG=OFF \
-            -DWITH_VIDEO_FFMPEG=OFF \
-            -DWITH_SWSCALE=OFF \
-            -DWITH_ALSA=OFF \
-            -DWITH_PULSE=OFF \
-            -DWITH_OSS=OFF \
-            -DWITH_CUPS=OFF \
-            -DWITH_PCSC=OFF \
-            -DWITH_KRB5=OFF \
-            -DWITH_FUSE=OFF \
+            -DWITH_FFMPEG=ON \
+            -DWITH_DSP_FFMPEG=ON \
+            -DWITH_VIDEO_FFMPEG=ON \
+            -DWITH_SWSCALE=ON \
+            -DWITH_ALSA=ON \
+            -DWITH_PULSE=ON \
+            -DWITH_CUPS=ON \
+            -DWITH_PCSC=ON \
+            -DWITH_KRB5=ON \
+            -DWITH_FUSE=ON \
+            -DWITH_CAIRO=ON \
+            -DWITH_JPEG=ON \
+            -DWITH_OPUS=ON \
+            -DWITH_SOXR=ON \
+            -DWITH_SYSTEMD=ON \
+            -DWITH_URIPARSER=ON \
             -DWITH_MANPAGES=OFF \
             -DWITH_UNICODE_BUILTIN=ON \
             -DWITH_CLANG_FORMAT=OFF \
             -DBUILD_TESTING=OFF \
-            -DCHANNEL_URBDRC=OFF \
-            -DCHANNEL_URBDRC_CLIENT=OFF
+            -DCHANNEL_URBDRC=ON \
+            -DCHANNEL_URBDRC_CLIENT=ON
+
+      - name: Verify required features
+        run: |
+          for option in WITH_ALSA WITH_PULSE WITH_FFMPEG WITH_CUPS WITH_PCSC WITH_KRB5 WITH_FUSE; do
+            grep -q "^${option}:BOOL=ON$" build-linux-clipboard/CMakeCache.txt
+          done
 
       - name: Build and stage installation
         run: |
-          cmake --build build-debian-clipboard --parallel 2
-          DESTDIR="$GITHUB_WORKSPACE/package-root" cmake --install build-debian-clipboard
+          cmake --build build-linux-clipboard --parallel 2
+          DESTDIR="$GITHUB_WORKSPACE/package-root" cmake --install build-linux-clipboard
           test -x package-root/opt/freerdp-clipboard/bin/xfreerdp3
 
       - name: Build Debian package
         env:
+          PACKAGE_VARIANT: ${{ matrix.id }}
           PACKAGE_VERSION: 3.30.1~dev0.clipboard.${{ github.run_number }}+${{ github.sha }}
         run: bash packaging/deb/freerdp-clipboard/build-package.sh package-root dist
 
-      - name: Upload Debian package
+      - name: Upload Linux package
         uses: actions/upload-artifact@v4
         with:
-          name: freerdp3-clipboard-debian-amd64-${{ github.sha }}
+          name: freerdp3-clipboard-${{ matrix.id }}-amd64-${{ github.sha }}
           path: |
             dist/*.deb
-            dist/SHA256SUMS
+            dist/SHA256SUMS-*
           if-no-files-found: error
           retention-days: 14
 
+  windows-x64:
+    name: Windows x64
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install static dependencies
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install `
+            openssl:x64-windows-static `
+            zlib:x64-windows-static
+
+      - name: Configure native Windows client
+        shell: pwsh
+        run: |
+          cmake -S . -B build-windows-clipboard -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="$pwd/stage-windows" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DOPENSSL_USE_STATIC_LIBS=ON `
+            -DZLIB_USE_STATIC_LIBS=ON `
+            -DWITH_BINARY_VERSIONING=OFF `
+            -DWITH_CLIENT_WINDOWS=ON `
+            -DWITH_CLIENT_SDL=OFF `
+            -DWITH_SERVER=OFF `
+            -DWITH_SAMPLE=OFF `
+            -DWITH_WINMM=ON `
+            -DWITH_MEDIA_FOUNDATION=ON `
+            -DWITH_FFMPEG=OFF `
+            -DWITH_SWSCALE=OFF `
+            -DWITH_MANPAGES=OFF `
+            -DWITH_CLANG_FORMAT=OFF `
+            -DBUILD_TESTING=OFF `
+            -DCHANNEL_URBDRC=OFF
+
+      - name: Build portable Windows client
+        shell: pwsh
+        run: |
+          cmake --build build-windows-clipboard --parallel 2
+          cmake --install build-windows-clipboard
+          $client = Get-ChildItem stage-windows -Recurse -File -Filter 'wfreerdp*.exe'
+          if (-not $client) { throw 'wfreerdp executable was not installed' }
+
+      - name: Create Windows ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item packaging/windows/freerdp-clipboard/README.txt stage-windows/
+          $archive = 'freerdp3-clipboard-windows-x64.zip'
+          Compress-Archive -Path stage-windows/* -DestinationPath "dist/$archive"
+          $hash = (Get-FileHash "dist/$archive" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content dist/SHA256SUMS-windows-x64
+
+      - name: Upload Windows ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: freerdp3-clipboard-windows-x64-${{ github.sha }}
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS-*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish release
+    if: github.repository == 'catcursor/FreeRDP' && github.event_name != 'pull_request'
+    needs:
+      - linux-amd64
+      - windows-x64
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download all packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create combined checksums
+        working-directory: dist
+        run: sha256sum *.deb *.zip > SHA256SUMS
+
       - name: Publish GitHub release
-        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: clipboard-${{ github.run_number }}-${{ github.sha }}
           target_commitish: ${{ github.sha }}
           name: FreeRDP clipboard build ${{ github.run_number }}
           body: |
-            Debian amd64 X11 build with explicit Ctrl+Shift+V clipboard push.
-            Install the .deb without replacing the distribution xfreerdp3 package.
+            Full X11 client builds for Debian 13 and Ubuntu 24.04, plus a native Windows x64 portable ZIP.
+            Normal clipboard direction is controlled with `/clipboard:direction-to:local,files-to:local`.
+            With the RDP window focused, press Win/Super+Shift+V to push the host clipboard once and paste it remotely.
           files: |
             dist/*.deb
+            dist/*.zip
             dist/SHA256SUMS
+            dist/SHA256SUMS-*
           fail_on_unmatched_files: true
           make_latest: true

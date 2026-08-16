@@ -881,9 +881,15 @@ void xf_keyboard_key_press(xfContext* xfc, const XKeyEvent* event, KeySym keysym
 	if (xfc->clipboardPushKeycode == event->keycode)
 		return;
 
-	if (!last && (event->state & ControlMask) && (event->state & ShiftMask) &&
+	if (!last && (event->state & Mod4Mask) && (event->state & ShiftMask) &&
 	    ((keysym == XK_V) || (keysym == XK_v)) && xf_cliprdr_force_local_to_remote(xfc))
 	{
+		rdpInput* input = xfc->common.context.input;
+		WINPR_ASSERT(input);
+		(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_LSHIFT);
+		(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_RSHIFT);
+		(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_LWIN);
+		(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_RWIN);
 		xfc->clipboardPushKeycode = event->keycode;
 		return;
 	}

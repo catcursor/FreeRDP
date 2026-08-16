@@ -23,5 +23,6 @@
 
 BOOL wf_cliprdr_init(wfContext* wfc, CliprdrClientContext* cliprdr);
 BOOL wf_cliprdr_uninit(wfContext* wfc, CliprdrClientContext* cliprdr);
+BOOL wf_cliprdr_force_local_to_remote(wfContext* wfc);
 
 #endif /* FREERDP_CLIENT_WIN_CLIPRDR_H */

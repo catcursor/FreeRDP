@@ -40,6 +40,8 @@
 
 #include <freerdp/utils/signal.h>
 #include <freerdp/log.h>
+#include <freerdp/input.h>
+#include <freerdp/scancode.h>
 #include <freerdp/client/cliprdr.h>
 #include <freerdp/channels/channels.h>
 #include <freerdp/channels/cliprdr.h>
@@ -138,6 +140,7 @@ struct xf_clipboard
 	CliprdrFileContext* file;
 	BOOL isImageContent;
 	BOOL forceSelectionPending;
+	BOOL forcePastePending;
 };
 
 static const char mime_text_plain[] = "text/plain";
@@ -882,12 +885,13 @@ static UINT xf_cliprdr_send_format_list(xfClipboard* clipboard, const CLIPRDR_FO
 	return clipboard->context->ClientFormatList(clipboard->context, &formatList);
 }
 
-static void xf_cliprdr_get_requested_targets(xfClipboard* clipboard, BOOL force)
+static UINT xf_cliprdr_get_requested_targets(xfClipboard* clipboard, BOOL force)
 {
 	UINT32 numFormats = 0;
 	CLIPRDR_FORMAT* formats = xf_cliprdr_get_client_formats(clipboard, &numFormats);
-	xf_cliprdr_send_format_list(clipboard, formats, numFormats, force);
+	const UINT rc = xf_cliprdr_send_format_list(clipboard, formats, numFormats, force);
 	xf_cliprdr_free_formats(formats, numFormats);
+	return rc;
 }
 
 static void xf_cliprdr_process_requested_data(xfClipboard* clipboard, BOOL hasData,
@@ -1265,13 +1269,22 @@ static BOOL xf_cliprdr_process_selection_notify(xfClipboard* clipboard,
 		if (xevent->property == None)
 		{
 			if (force)
+			{
+				clipboard->forcePastePending = FALSE;
 				WLog_WARN(TAG, "clipboard owner did not provide TARGETS for forced copy");
+			}
 			else
 				xf_cliprdr_send_client_format_list(clipboard);
 		}
 		else
 		{
-			xf_cliprdr_get_requested_targets(clipboard, force);
+			const UINT rc = xf_cliprdr_get_requested_targets(clipboard, force);
+			if (force && (rc != CHANNEL_RC_OK))
+			{
+				clipboard->forcePastePending = FALSE;
+				WLog_ERR(TAG, "failed to force local clipboard announcement: 0x%08" PRIx32,
+				         rc);
+			}
 		}
 
 		return TRUE;
@@ -1886,6 +1899,10 @@ BOOL xf_cliprdr_force_local_to_remote(xfContext* xfc)
 		WLog_WARN(TAG, "clipboard channel is not ready for a forced local-to-remote copy");
 		return FALSE;
 	}
+	if (clipboard->forcePastePending || clipboard->forceSelectionPending)
+		return TRUE;
+
+	clipboard->forcePastePending = TRUE;
 
 	(void)xf_cliprdr_update_owner(clipboard);
 	if (clipboard->owner && (clipboard->owner != xfc->drawable))
@@ -1905,6 +1922,7 @@ BOOL xf_cliprdr_force_local_to_remote(xfContext* xfc)
 
 	if (rc != CHANNEL_RC_OK)
 	{
+		clipboard->forcePastePending = FALSE;
 		WLog_ERR(TAG, "failed to force local clipboard announcement: 0x%08" PRIx32, rc);
 		return FALSE;
 	}
@@ -2162,12 +2180,34 @@ out:
  * @return 0 on success, otherwise a Win32 error code
  */
 static UINT xf_cliprdr_server_format_list_response(
-    WINPR_ATTR_UNUSED CliprdrClientContext* context,
-    WINPR_ATTR_UNUSED const CLIPRDR_FORMAT_LIST_RESPONSE* formatListResponse)
+    CliprdrClientContext* context, const CLIPRDR_FORMAT_LIST_RESPONSE* formatListResponse)
 {
 	WINPR_ASSERT(context);
 	WINPR_ASSERT(formatListResponse);
-	// xfClipboard* clipboard = (xfClipboard*) context->custom;
+
+	xfClipboard* clipboard = cliprdr_file_context_get_context(context->custom);
+	WINPR_ASSERT(clipboard);
+
+	if (!clipboard->forcePastePending)
+		return CHANNEL_RC_OK;
+
+	clipboard->forcePastePending = FALSE;
+	if (formatListResponse->common.msgFlags != CB_RESPONSE_OK)
+	{
+		WLog_WARN(TAG, "forced clipboard format list was rejected by the remote session");
+		return CHANNEL_RC_OK;
+	}
+
+	xfContext* xfc = clipboard->xfc;
+	WINPR_ASSERT(xfc);
+	rdpInput* input = xfc->common.context.input;
+	WINPR_ASSERT(input);
+
+	(void)freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, RDP_SCANCODE_LSHIFT);
+	(void)freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, RDP_SCANCODE_INSERT);
+	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_INSERT);
+	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_LSHIFT);
+	WLog_INFO(TAG, "forced clipboard accepted; sent Shift+Insert to the remote session");
 	return CHANNEL_RC_OK;
 }
 

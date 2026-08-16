@@ -88,6 +88,7 @@ extern "C"
 		int client_height;
 
 		HANDLE keyboardThread;
+		BOOL clipboardPushVDown;
 
 		HICON icon;
 		HWND hWndParent;
