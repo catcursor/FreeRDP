@@ -182,8 +182,7 @@ jobs:
       - name: Configure native Windows client
         shell: pwsh
         run: |
-          cmake -S . -B build-windows-clipboard -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
+          cmake -S . -B build-windows-clipboard -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_INSTALL_PREFIX="$pwd/stage-windows" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static `
@@ -208,8 +207,8 @@ jobs:
       - name: Build portable Windows client
         shell: pwsh
         run: |
-          cmake --build build-windows-clipboard --parallel 2
-          cmake --install build-windows-clipboard
+          cmake --build build-windows-clipboard --config Release --parallel 2
+          cmake --install build-windows-clipboard --config Release
           $client = Get-ChildItem stage-windows -Recurse -File -Filter 'wfreerdp*.exe'
           if (-not $client) { throw 'wfreerdp executable was not installed' }
 
