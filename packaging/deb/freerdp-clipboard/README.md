@@ -6,6 +6,7 @@ This package is an isolated FreeRDP 3 X11 build. It does not replace the Debian
 - packaged files are installed below `/opt/freerdp-clipboard`;
 - `/usr/bin/xfreerdp3-clipboard` is the only additional command;
 - separate builds target Debian 13 and Ubuntu 24.04 on amd64;
+- CI installs each generated package in its matching distribution container;
 - audio, FFmpeg video/audio codecs, printer, smart-card, Kerberos, FUSE and USB
   redirection support are enabled.
 
