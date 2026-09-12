@@ -38,8 +38,6 @@
 #include <winpr/stream.h>
 
 #include <freerdp/log.h>
-#include <freerdp/input.h>
-#include <freerdp/scancode.h>
 #include <freerdp/client/cliprdr.h>
 
 #include <strsafe.h>
@@ -140,7 +138,6 @@ typedef struct
 	fnAddClipboardFormatListener AddClipboardFormatListener;
 	fnRemoveClipboardFormatListener RemoveClipboardFormatListener;
 	fnGetUpdatedClipboardFormats GetUpdatedClipboardFormats;
-	LONG forcePastePending;
 } wfClipboard;
 
 #define WM_CLIPRDR_MESSAGE (WM_USER + 156)
@@ -1315,13 +1312,9 @@ BOOL wf_cliprdr_force_local_to_remote(wfContext* wfc)
 		return FALSE;
 	}
 
-	if (InterlockedCompareExchange(&clipboard->forcePastePending, TRUE, FALSE) != FALSE)
-		return TRUE;
-
 	const UINT rc = cliprdr_send_format_list_ex(clipboard, TRUE);
 	if (rc != CHANNEL_RC_OK)
 	{
-		InterlockedExchange(&clipboard->forcePastePending, FALSE);
 		WLog_ERR(TAG, "failed to force local clipboard announcement: 0x%08" PRIx32, rc);
 		return FALSE;
 	}
@@ -1986,28 +1979,10 @@ static UINT
 wf_cliprdr_server_format_list_response(CliprdrClientContext* context,
                                        const CLIPRDR_FORMAT_LIST_RESPONSE* formatListResponse)
 {
-	WINPR_ASSERT(context);
-	WINPR_ASSERT(formatListResponse);
-
-	wfClipboard* clipboard = (wfClipboard*)context->custom;
-	WINPR_ASSERT(clipboard);
+	(void)context;
 
 	if (formatListResponse->common.msgFlags != CB_RESPONSE_OK)
 		WLog_WARN(TAG, "format list update failed");
-
-	if (InterlockedExchange(&clipboard->forcePastePending, FALSE) == FALSE)
-		return CHANNEL_RC_OK;
-
-	if (formatListResponse->common.msgFlags != CB_RESPONSE_OK)
-		return CHANNEL_RC_OK;
-
-	rdpInput* input = clipboard->wfc->common.context.input;
-	WINPR_ASSERT(input);
-	(void)freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, RDP_SCANCODE_LSHIFT);
-	(void)freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, RDP_SCANCODE_INSERT);
-	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_INSERT);
-	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_LSHIFT);
-	WLog_INFO(TAG, "forced clipboard accepted; sent Shift+Insert to the remote session");
 
 	return CHANNEL_RC_OK;
 }

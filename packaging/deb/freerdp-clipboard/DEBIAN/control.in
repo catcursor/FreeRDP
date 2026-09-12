@@ -9,5 +9,6 @@ Installed-Size: @INSTALLED_SIZE@
 Homepage: https://github.com/catcursor/FreeRDP
 Description: Isolated FreeRDP 3 X11 client with explicit clipboard push hotkey
  Installs under /opt/freerdp-clipboard and provides xfreerdp3-clipboard.
- Win/Super+Shift+V explicitly sends and pastes non-file host clipboard data in
- the active RDP session while normal local-to-remote transfer remains disabled.
+ Win/Super+Shift+V explicitly synchronizes non-file host clipboard data to the
+ active RDP session while normal local-to-remote transfer remains disabled.
+ Pasting remains a separate manual action.

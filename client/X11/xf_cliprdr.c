@@ -40,8 +40,6 @@
 
 #include <freerdp/utils/signal.h>
 #include <freerdp/log.h>
-#include <freerdp/input.h>
-#include <freerdp/scancode.h>
 #include <freerdp/client/cliprdr.h>
 #include <freerdp/channels/channels.h>
 #include <freerdp/channels/cliprdr.h>
@@ -140,7 +138,6 @@ struct xf_clipboard
 	CliprdrFileContext* file;
 	BOOL isImageContent;
 	BOOL forceSelectionPending;
-	BOOL forcePastePending;
 };
 
 static const char mime_text_plain[] = "text/plain";
@@ -1270,7 +1267,6 @@ static BOOL xf_cliprdr_process_selection_notify(xfClipboard* clipboard,
 		{
 			if (force)
 			{
-				clipboard->forcePastePending = FALSE;
 				WLog_WARN(TAG, "clipboard owner did not provide TARGETS for forced copy");
 			}
 			else
@@ -1281,7 +1277,6 @@ static BOOL xf_cliprdr_process_selection_notify(xfClipboard* clipboard,
 			const UINT rc = xf_cliprdr_get_requested_targets(clipboard, force);
 			if (force && (rc != CHANNEL_RC_OK))
 			{
-				clipboard->forcePastePending = FALSE;
 				WLog_ERR(TAG, "failed to force local clipboard announcement: 0x%08" PRIx32,
 				         rc);
 			}
@@ -1899,10 +1894,8 @@ BOOL xf_cliprdr_force_local_to_remote(xfContext* xfc)
 		WLog_WARN(TAG, "clipboard channel is not ready for a forced local-to-remote copy");
 		return FALSE;
 	}
-	if (clipboard->forcePastePending || clipboard->forceSelectionPending)
+	if (clipboard->forceSelectionPending)
 		return TRUE;
-
-	clipboard->forcePastePending = TRUE;
 
 	(void)xf_cliprdr_update_owner(clipboard);
 	if (clipboard->owner && (clipboard->owner != xfc->drawable))
@@ -1922,7 +1915,6 @@ BOOL xf_cliprdr_force_local_to_remote(xfContext* xfc)
 
 	if (rc != CHANNEL_RC_OK)
 	{
-		clipboard->forcePastePending = FALSE;
 		WLog_ERR(TAG, "failed to force local clipboard announcement: 0x%08" PRIx32, rc);
 		return FALSE;
 	}
@@ -2180,34 +2172,14 @@ out:
  * @return 0 on success, otherwise a Win32 error code
  */
 static UINT xf_cliprdr_server_format_list_response(
-    CliprdrClientContext* context, const CLIPRDR_FORMAT_LIST_RESPONSE* formatListResponse)
+    WINPR_ATTR_UNUSED CliprdrClientContext* context,
+    const CLIPRDR_FORMAT_LIST_RESPONSE* formatListResponse)
 {
 	WINPR_ASSERT(context);
 	WINPR_ASSERT(formatListResponse);
 
-	xfClipboard* clipboard = cliprdr_file_context_get_context(context->custom);
-	WINPR_ASSERT(clipboard);
-
-	if (!clipboard->forcePastePending)
-		return CHANNEL_RC_OK;
-
-	clipboard->forcePastePending = FALSE;
 	if (formatListResponse->common.msgFlags != CB_RESPONSE_OK)
-	{
-		WLog_WARN(TAG, "forced clipboard format list was rejected by the remote session");
-		return CHANNEL_RC_OK;
-	}
-
-	xfContext* xfc = clipboard->xfc;
-	WINPR_ASSERT(xfc);
-	rdpInput* input = xfc->common.context.input;
-	WINPR_ASSERT(input);
-
-	(void)freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, RDP_SCANCODE_LSHIFT);
-	(void)freerdp_input_send_keyboard_event_ex(input, TRUE, FALSE, RDP_SCANCODE_INSERT);
-	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_INSERT);
-	(void)freerdp_input_send_keyboard_event_ex(input, FALSE, FALSE, RDP_SCANCODE_LSHIFT);
-	WLog_INFO(TAG, "forced clipboard accepted; sent Shift+Insert to the remote session");
+		WLog_WARN(TAG, "format list update failed");
 	return CHANNEL_RC_OK;
 }
 

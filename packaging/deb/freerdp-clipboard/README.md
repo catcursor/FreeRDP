@@ -29,9 +29,9 @@ xfreerdp3-clipboard \
 Normal remote-to-local text and file clipboard transfer remains enabled.
 Normal local-to-remote text and file clipboard transfer is rejected. With the
 RDP window focused, press `Super+Shift+V` to explicitly announce the current
-non-file X11 clipboard formats to that one RDP session. After the remote side
-accepts the format list, the client sends `Shift+Insert` to paste it. The shortcut is
-consumed locally and is not forwarded to the remote desktop.
+non-file X11 clipboard formats to that one RDP session. The shortcut only
+synchronizes the clipboard; paste manually in the remote application afterwards.
+The shortcut is consumed locally and is not forwarded to the remote desktop.
 
 File formats are deliberately excluded from the forced path. A later ordinary
 local clipboard change revokes any unused forced authorization, and a successful

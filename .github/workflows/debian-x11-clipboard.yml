@@ -266,7 +266,7 @@ jobs:
           body: |
             Full X11 client builds for Debian 13 and Ubuntu 24.04, plus a native Windows x64 portable ZIP.
             Normal clipboard direction is controlled with `/clipboard:direction-to:local,files-to:local`.
-            With the RDP window focused, press Win/Super+Shift+V to push the host clipboard once and paste it remotely.
+            With the RDP window focused, press Win/Super+Shift+V to synchronize the host clipboard once, then paste manually in the remote application.
           files: |
             dist/*.deb
             dist/*.zip
